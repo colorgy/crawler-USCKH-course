@@ -1,0 +1,6 @@
+gem 'nokogiri'
+gem 'rest-client'
+gem 'capybara'
+gem 'pry'
+gem 'poltergeist'
+gem 'ruby-progressbar'
