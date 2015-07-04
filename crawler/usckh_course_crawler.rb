@@ -40,7 +40,6 @@ class UsckhCourseCrawler
 
     visit @get_url
 
-
     r = RestClient::Request.execute(
       method: :post,
       url: @result_url,
@@ -155,6 +154,18 @@ class UsckhCourseCrawler
       }
     end
 
+    @threads = []
+    @courses.each do |course|
+      sleep(1) until (
+        @threads.delete_if { |t| !t.status };  # remove dead (ended) threads
+        @threads.count < ( (ENV['MAX_THREADS'] && ENV['MAX_THREADS'].to_i) || 30)
+      )
+      @threads << Thread.new {
+        @after_each_proc.call(course: course) if @after_each_proc
+      }
+    end
+    ThreadsWait.all_waits(*@threads)
+
     @courses
   end
 
@@ -203,5 +214,5 @@ class UsckhCourseCrawler
     end
 end
 
-cc = UsckhCourseCrawler.new(year: 2014, term: 2)
-File.write('usckh_courses.json', JSON.pretty_generate(cc.courses))
+# cc = UsckhCourseCrawler.new(year: 2014, term: 1)
+# File.write('1031_usckh_courses.json', JSON.pretty_generate(cc.courses))
