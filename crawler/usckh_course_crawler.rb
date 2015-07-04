@@ -2,6 +2,11 @@ require 'pry'
 require 'crawler_rocks'
 require 'rest-client'
 
+require 'iconv'
+
+require 'thread'
+require 'thwait'
+
 class UsckhCourseCrawler
   include CrawlerRocks::DSL
 
@@ -17,14 +22,17 @@ class UsckhCourseCrawler
 
   def initialize year: current_year, term: current_term, update_progress: nil, after_each: nil, params: nil
 
-    @get_url = "http://studentsystem.usc.edu.tw/CourseSystem/Top.asp"
-    @result_url = "http://studentsystem.usc.edu.tw/CourseSystem/result_NewNew.asp"
+    # @get_url = "http://studentsystem.usc.edu.tw/CourseSystem/Top.asp"
+    @get_url = "https://search.kh.usc.edu.tw/CourseSystem/Top.asp"
+    # @result_url = "http://studentsystem.usc.edu.tw/CourseSystem/result_NewNew.asp"
+    @result_url = "https://search.kh.usc.edu.tw/CourseSystem/Result.asp"
 
     @year = params && params["year"].to_i || year
     @term = params && params["term"].to_i || term
     @update_progress_proc = update_progress
     @after_each_proc = after_each
 
+    @ic = Iconv.new("utf-8//IGNORE//translit","big5")
   end
 
   def courses detail: false
@@ -33,26 +41,32 @@ class UsckhCourseCrawler
     visit @get_url
 
 
-    r = RestClient.post(@result_url, {
-      "optSclYer" => @year-1911,
-      "optSclTrm" => @term,
-      "optSLSID" => "$",
-      "optDEPID" => "$",
-      "optSEL" => 0,
-      "optSEARCH" => "",
-      "WhatCourse" => "All",
-      "btnSend" => "課程搜尋"
-    }, cookies: @cookies)
+    r = RestClient::Request.execute(
+      method: :post,
+      url: @result_url,
+      payload: {
+        "optSclYer" => @year-1911,
+        "optSclTrm" => @term,
+        "optSLSID" => "$",
+        "optDEPID" => "$",
+        "optSEL" => 1,
+        "optSEARCH" => "",
+        "btnSend" => CGI.escape("開始搜尋".encode('big5')),
+      },
+      timeout: 600,
+      cookies: @cookies
+    )
 
     # ic = Iconv.new('utf-8', r.encoding)
     # binding.pry.force_encoding('utf-8')
-    @doc = Nokogiri::HTML(r.to_s.force_encoding('big5').encode('utf-8', invalid: :replace, :undef => :replace, :replace => ''))
+    # @doc = Nokogiri::HTML(r.to_s.force_encoding('big5').encode('utf-8', invalid: :replace, :undef => :replace, :replace => ''))
+    @doc = Nokogiri::HTML(@ic.iconv r)
 
     rows = @doc.css('tr:nth-child(n+4)')
     rows.each do |row|
       columns = row.css('td')
       begin
-        match_raws = columns[9].text.strip.split('/').map {|s|
+        match_raws = columns[8].text.strip.split('/').map {|s|
           s.match(/(?<day>[#{DAYS.keys.join}]|)\((?<periods>.+)\)(?<classroom>$|.+)/)
         }
       rescue
@@ -74,7 +88,7 @@ class UsckhCourseCrawler
         end
       end
 
-      url = columns[3].css('a')[0]["href"] if not columns[3].css('a').empty?
+      url = columns[2].css('a')[0]["href"] if not columns[2].css('a').empty?
       group_code = nil; group = nil; department = nil; department_code = nil;
 
 
@@ -88,23 +102,28 @@ class UsckhCourseCrawler
         group_code = m[:gc]
       end
 
+      general_code = nil;
+      columns[2] && columns[2].text.strip.match(/^\((?<c>.+?)\).+$/) {|m| general_code = m[:c]}
 
       serial_no = columns[0].text.strip
-      code = "#{@year}-#{@term}-#{serial_no}-#{group_code}"
+      code = "#{@year}-#{@term}-#{general_code}-#{group_code}-#{serial_no}"
 
       @courses << {
+        year: @year,
+        term: @term,
+        code: code,
+        general_code: general_code,
         serial_no: serial_no,
-        name: columns[3].text.strip,
-        url: "http://studentsystem.usc.edu.tw/CourseSystem/#{url}",
-        required: columns[5].text.include?('必'),
-        credits: Integer(columns[6].text.strip),
-        hours: Integer(columns[7].text.strip),
-        lecturer: columns[8].text.strip,
+        name: columns[2].text.strip,
+        url: url && URI.join("http://studentsystem.usc.edu.tw/", url),
+        required: columns[4].text.include?('必'),
+        credits: columns[5].text.strip.to_i,
+        hours: columns[6].text.strip.to_i,
+        lecturer: columns[7].text.strip,
         department: department,
         department_code: department_code,
         group: group,
         group_code: group_code,
-        code: code,
         day_1: course_days[0],
         day_2: course_days[1],
         day_3: course_days[2],
@@ -132,11 +151,10 @@ class UsckhCourseCrawler
         location_7: course_locations[6],
         location_8: course_locations[7],
         location_9: course_locations[8],
-        note: columns[15].text.strip
+        # note: columns[15].text.strip
       }
     end
 
-    File.write('courses.json', JSON.pretty_generate(@courses))
     @courses
   end
 
@@ -185,5 +203,5 @@ class UsckhCourseCrawler
     end
 end
 
-cc = UscCourseCrawler.new(year: 2014, term: 2)
-cc.courses
+cc = UsckhCourseCrawler.new(year: 2014, term: 2)
+File.write('usckh_courses.json', JSON.pretty_generate(cc.courses))
