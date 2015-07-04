@@ -2,7 +2,7 @@ require 'pry'
 require 'crawler_rocks'
 require 'rest-client'
 
-class UscCourseCrawler
+class UsckhCourseCrawler
   include CrawlerRocks::DSL
 
   DAYS = {
